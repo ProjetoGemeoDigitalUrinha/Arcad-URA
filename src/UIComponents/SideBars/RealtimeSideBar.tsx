@@ -1,4 +1,5 @@
 /** biome-ignore-all lint/suspicious/noArrayIndexKey: todo */
+import { Box, ButtonBase, Chip, Divider, LinearProgress, Paper, Stack, TextField, Typography } from "@mui/material";
 import { useEffect, useState } from "react";
 import { ActionLabels } from "../../store/ActionsLabels";
 import { useStore } from "../../store/Store";
@@ -6,13 +7,59 @@ import { useStore } from "../../store/Store";
 // Metadata structure to link the UI options to the store IDs and model parts
 const DEVICE_METADATA: Record<
 	string,
-	{ name: string; type: string; partName: string }
+	{ name: string; type: string; partName: string | null; keys: string[]; unit: string; description: string }
 > = {
 	hc04: {
-		name: "HC-04",
+		name: "Sensor ultrassônico HC-04",
 		type: "Sensor",
 		partName: "ultrasonic",
+		keys: ["hc04", "ultrassonic", "ultrasonic"],
+		unit: "cm",
+		description: "Mede a distância entre o robô e os obstáculos.",
 	},
+	motorLeft: {
+		name: "Motor esquerdo",
+		type: "Atuador",
+		partName: "leftMotor",
+		keys: ["motorLeft", "leftMotor"],
+		unit: "RPM",
+		description: "Controla a rotação da roda esquerda.",
+	},
+	motorRight: {
+		name: "Motor direito",
+		type: "Atuador",
+		partName: "rightMotor",
+		keys: ["motorDir", "motorRight", "rightMotor"],
+		unit: "RPM",
+		description: "Controla a rotação da roda direita.",
+	},
+	esp32: {
+		name: "ESP-32",
+		type: "Controlador",
+		partName: null,
+		keys: ["esp32Voltage", "esp32", "ESP-32"],
+		unit: "V",
+		description: "Controlador responsável pela comunicação com o robô.",
+	},
+	battery: {
+		name: "Bateria",
+		type: "Alimentação",
+		partName: null,
+		keys: ["batteryVoltage", "battery", "Battery"],
+		unit: "V",
+		description: "Fonte de alimentação dos componentes do robô.",
+	},
+};
+
+const getLatestValue = (
+	history: Record<string, { value: unknown; timestamp: number }[]>,
+	keys: string[],
+) => {
+	for (const key of keys) {
+		const records = history[key];
+		if (records?.length) return records[records.length - 1].value;
+	}
+	return null;
 };
 
 // Helper function to format the timestamp to match the previous UI style
@@ -21,7 +68,7 @@ const formatTimestamp = (timestamp: number) => {
 	const pad = (n: number) => {
 		return n.toString().padStart(2, "0");
 	};
-	return `${d.getDate()}/${d.getMonth() + 1}/${d.getFullYear()}-${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+	return `${pad(d.getDate())}/${pad(d.getMonth() + 1)}/${d.getFullYear()} às ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
 };
 
 export const RealtimeSideBar = () => {
@@ -30,7 +77,7 @@ export const RealtimeSideBar = () => {
 	const setSensorConfig = useStore((store) => store.setSensorConfig);
 	const sensorHistory = useStore((store) => store.sensorHistory);
 
-	const [selectedId, setSelectedId] = useState<string | null>(null);
+	const [selectedId, setSelectedId] = useState<string | null>("hc04");
 
 	// States to handle the editable configurations
 	const [minValue, setMinValue] = useState<number | string>("");
@@ -60,7 +107,7 @@ export const RealtimeSideBar = () => {
 	// Update the store configuration safely
 	// biome-ignore lint/suspicious/noExplicitAny: generic value handler
 	const handleConfigUpdate = (key: string, value: any) => {
-		if (selectedId === null) {
+		if (selectedId === null || DEVICE_METADATA[selectedId].type !== "Sensor") {
 			return;
 		}
 
@@ -77,162 +124,127 @@ export const RealtimeSideBar = () => {
 	};
 
 	const handleSelect = (id: string) => {
+		if (selectedId === id) {
+			return;
+		}
+
 		if (selectedId !== null && selectedId !== id) {
 			const prevPart = DEVICE_METADATA[selectedId].partName;
-			triggerAction(ActionLabels.DESELECT_FROM_REALTIME_LIST, "realtimeList", {
-				selected: prevPart,
-			});
+			if (prevPart) {
+				triggerAction(ActionLabels.DESELECT_FROM_REALTIME_LIST, "realtimeList", {
+					selected: prevPart,
+				});
+			}
 		}
 
 		setSelectedId(id);
 
 		const newPart = DEVICE_METADATA[id].partName;
-		triggerAction(
-			ActionLabels.TOGGLE_SELECT_FROM_REALTIME_LIST,
-			"realtimeList",
-			{
-				selected: newPart,
-			},
-		);
+		if (newPart) {
+			triggerAction(
+				ActionLabels.TOGGLE_SELECT_FROM_REALTIME_LIST,
+				"realtimeList",
+				{ selected: newPart },
+			);
+		}
 	};
 
 	const selectedData = selectedId !== null ? DEVICE_METADATA[selectedId] : null;
+	const mqttInstance = useStore((store) => store.mqttInstance);
+	const currentValue = selectedData ? getLatestValue(sensorHistory, selectedData.keys) : null;
 
 	// Retrieve and sort the history array (newest first)
 	let currentHistory: { value: any; timestamp: number }[] = [];
 	if (selectedId !== null) {
-		if (sensorHistory[selectedId] !== undefined) {
-			currentHistory = [...sensorHistory[selectedId]];
+		const historyKeys = DEVICE_METADATA[selectedId].keys;
+		const historyKey = historyKeys.find((key) => sensorHistory[key] !== undefined);
+		if (historyKey !== undefined) {
+			currentHistory = [...sensorHistory[historyKey]];
 			currentHistory.sort((a, b) => {
 				return b.timestamp - a.timestamp;
 			});
 		}
 	}
 
+	const config = selectedId === "hc04" ? sensorConfigs[selectedId] : undefined;
+	const range = config ? config.maxValue - config.minValue : 0;
+	const numericValue = currentValue === null ? null : Number(currentValue);
+	const progress = config && numericValue !== null && !Number.isNaN(numericValue) && range > 0
+		? Math.min(100, Math.max(0, ((numericValue - config.minValue) / range) * 100))
+		: 0;
+	const isConnected = Boolean(mqttInstance?.connected);
+	const renderComponent = (id: string) => {
+		const component = DEVICE_METADATA[id];
+		const value = getLatestValue(sensorHistory, component.keys);
+		return (
+			<ButtonBase
+				key={id}
+				className={`realtime-panel__component ${selectedId === id ? "is-selected" : ""}`}
+				onClick={() => handleSelect(id)}
+			>
+				<Box>
+					<Typography variant="body2" sx={{ fontWeight: 700 }}>{component.name}</Typography>
+					<Typography variant="caption" color="text.secondary">
+						{value === null ? "Aguardando dados" : `${String(value)} ${component.unit}`}
+					</Typography>
+				</Box>
+				<Chip label={value === null ? "Sem dados" : "Normal"} size="small" variant="outlined" color={value === null ? "default" : "success"} />
+			</ButtonBase>
+		);
+	};
+
 	return (
-		<div className="w-full min-h-screen bg-[#d9d9d9] flex flex-col items-center py-6 px-4 font-sans text-black shadow-[-2px_0_5px_rgba(0,0,0,0.1)]">
-			{/* Sensors/Actuators List Box */}
-			<div className="w-full bg-[#cecece] rounded-xl shadow-[2px_2px_8px_rgba(0,0,0,0.2)] border border-gray-400 overflow-hidden mb-8 pb-12">
-				<p className="text-center font-bold text-[15px] pt-4 pb-6">
-					Sensors/Actuators
-				</p>
-				<div className="flex flex-col w-full">
-					<button
-						type="button"
-						className={`w-full text-left px-4 py-1.5 font-bold text-[14px] transition-colors ${
-							selectedId === "hc04" ? "bg-white" : "hover:bg-white/40"
-						}`}
-						onClick={() => {
-							handleSelect("hc04");
-						}}
-					>
-						HC-04
-					</button>
-				</div>
-			</div>
-
-			{/* Inspector Details */}
-			{selectedData !== null ? (
-				<div className="w-full px-2 flex flex-col">
-					<p className="text-center font-bold text-[16px] mb-6">Inspector</p>
-
-					<div className="flex justify-between items-center w-full font-bold text-[14px] mb-8">
-						<span>Name: {selectedData.name}</span>
-						<span>Type: {selectedData.type}</span>
-					</div>
-
-					<p className="text-center font-bold text-[15px] mb-6">
-						Configuration
-					</p>
-
-					{/* Min Config */}
-					<div className="flex justify-between items-center w-full font-bold text-[13px] mb-4">
-						<label className="flex items-center gap-1">
-							Min Value:
-							<input
-								type="number"
-								className="w-10 border-b text-left focus:outline-none p-0 bg-transparent"
-								value={minValue}
-								onChange={(e) => {
-									setMinValue(e.target.value);
-									handleConfigUpdate("minValue", Number(e.target.value));
-								}}
-							/>
-						</label>
-						<label className="flex items-center gap-2 cursor-pointer">
-							Color:
-							<div className="relative w-4 h-4 rounded-sm overflow-hidden flex-shrink-0">
-								<input
-									type="color"
-									className="absolute -top-2 -left-2 w-8 h-8 cursor-pointer"
-									value={minColor}
-									onChange={(e) => {
-										setMinColor(e.target.value);
-										handleConfigUpdate("minColor", e.target.value);
-									}}
-								/>
-							</div>
-							<span>{minColor.toUpperCase()}</span>
-						</label>
-					</div>
-
-					{/* Max Config */}
-					<div className="flex justify-between items-center w-full font-bold text-[13px] mb-8">
-						<label className="flex items-center gap-1">
-							Max Value:
-							<input
-								type="number"
-								className="w-10 border-b text-left focus:outline-none p-0 bg-transparent"
-								value={maxValue}
-								onChange={(e) => {
-									setMaxValue(e.target.value);
-									handleConfigUpdate("maxValue", Number(e.target.value));
-								}}
-							/>
-						</label>
-						<label className="flex items-center gap-2 cursor-pointer">
-							Color:
-							<div className="relative w-4 h-4 rounded-sm overflow-hidden flex-shrink-0">
-								<input
-									type="color"
-									className="absolute -top-2 -left-2 w-8 h-8 cursor-pointer"
-									value={maxColor}
-									onChange={(e) => {
-										setMaxColor(e.target.value);
-										handleConfigUpdate("maxColor", e.target.value);
-									}}
-								/>
-							</div>
-							<span>{maxColor.toUpperCase()}</span>
-						</label>
-					</div>
-
-					<p className="text-center font-bold text-[15px] mb-4">Last values</p>
-
-					{/* History List Box */}
-					<div className="w-full bg-[#d9d9d9] rounded-lg shadow-[inset_2px_2px_6px_rgba(0,0,0,0.3),_2px_2px_6px_rgba(0,0,0,0.1)] border border-gray-400 p-4 h-[220px] overflow-y-auto">
-						<ul className="flex flex-col gap-1.5">
-							{currentHistory.length === 0 ? (
-								<li className="text-[11px] font-bold tracking-tight text-gray-500">
-									No history recorded yet.
-								</li>
-							) : (
-								currentHistory.map((record, index) => {
-									return (
-										<li
-											key={index}
-											className="text-[11px] font-bold tracking-tight"
-										>
-											{formatTimestamp(record.timestamp)} Value:{" "}
-											{String(record.value)}
-										</li>
-									);
-								})
-							)}
-						</ul>
-					</div>
-				</div>
-			) : null}
-		</div>
+		<Stack className="realtime-panel" spacing={0}>
+			<Box className="realtime-panel__status">
+				<Chip label={isConnected ? "Robô conectado" : "Robô desconectado"} color={isConnected ? "success" : "default"} size="small" />
+			</Box>
+			<Box className="realtime-panel__section">
+				<Stack direction="row" sx={{ justifyContent: "space-between", alignItems: "center", mb: 1.5 }}>
+					<Typography variant="subtitle1" sx={{ fontWeight: 700 }}>Componentes</Typography>
+					<Typography variant="caption" color="text.secondary">5 monitorados</Typography>
+				</Stack>
+				<Typography className="realtime-panel__eyebrow">Atuadores</Typography>
+				{["motorLeft", "motorRight"].map(renderComponent)}
+				<Typography className="realtime-panel__eyebrow">Sensores</Typography>
+				{renderComponent("hc04")}
+				<Typography className="realtime-panel__eyebrow">Controle e alimentação</Typography>
+				{["esp32", "battery"].map(renderComponent)}
+			</Box>
+			<Divider />
+			{selectedData && (
+				<Box className="realtime-inspector">
+					<Typography className="realtime-panel__eyebrow">Inspetor</Typography>
+					<Typography variant="subtitle1" sx={{ fontWeight: 700 }}>{selectedData.name}</Typography>
+					<Typography variant="body2" color="text.secondary" sx={{ mb: 1.5 }}>{selectedData.description}</Typography>
+					<Stack direction="row" spacing={1} sx={{ mb: 1.5 }}>
+						<Chip label={currentValue === null ? "Sem telemetria" : "Normal"} color={currentValue === null ? "default" : "success"} size="small" />
+						<Chip label={selectedData.type} variant="outlined" size="small" />
+					</Stack>
+					<Paper className="realtime-reading" elevation={0}>
+						<Typography variant="caption">Leitura atual</Typography>
+						<Typography className="realtime-reading__value">{currentValue === null ? "--" : String(currentValue)} <small>{selectedData.unit}</small></Typography>
+						{config && <LinearProgress variant="determinate" value={progress} />}
+						{currentHistory[0] && <Typography className="realtime-reading__time" variant="caption">Atualizado às {formatTimestamp(currentHistory[0].timestamp)}</Typography>}
+					</Paper>
+					{config && (
+						<>
+							<Typography variant="subtitle2" sx={{ fontWeight: 700, mt: 2, mb: 1 }}>Configuração da escala</Typography>
+							<Stack direction="row" spacing={1}>
+								<TextField label="Mínimo" type="number" size="small" value={minValue} onChange={(e) => { setMinValue(e.target.value); handleConfigUpdate("minValue", Number(e.target.value)); }} />
+								<TextField label="Máximo" type="number" size="small" value={maxValue} onChange={(e) => { setMaxValue(e.target.value); handleConfigUpdate("maxValue", Number(e.target.value)); }} />
+							</Stack>
+							<Stack direction="row" spacing={2} sx={{ mt: 1.5 }}>
+								<label className="realtime-color"><span>Cor mínima</span><input type="color" value={minColor} onChange={(e) => { setMinColor(e.target.value); handleConfigUpdate("minColor", e.target.value); }} /></label>
+								<label className="realtime-color"><span>Cor máxima</span><input type="color" value={maxColor} onChange={(e) => { setMaxColor(e.target.value); handleConfigUpdate("maxColor", e.target.value); }} /></label>
+							</Stack>
+						</>
+					)}
+					<Typography variant="subtitle2" sx={{ fontWeight: 700, mt: 2 }}>Últimas leituras</Typography>
+					<Box className="realtime-history">
+						{currentHistory.length === 0 ? <Typography variant="caption" color="text.secondary">Nenhuma leitura recebida.</Typography> : currentHistory.slice(0, 8).map((record, index) => <Typography key={`${record.timestamp}-${index}`} variant="caption">{formatTimestamp(record.timestamp)}: {String(record.value)} {selectedData.unit}</Typography>)}
+					</Box>
+				</Box>
+			)}
+		</Stack>
 	);
 };

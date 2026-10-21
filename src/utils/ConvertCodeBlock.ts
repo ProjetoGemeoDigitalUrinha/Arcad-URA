@@ -70,7 +70,7 @@ export const ConvertJSONToCodeBlocks = (parsedData: {
 
 	parsedData.steps.forEach((step, index) => {
 		// Move X to the right by the width of the block so they snap horizontally
-		currentX += blockWidth;
+		currentX += blockWidth + 36;
 
 		const blockType = getCommandTypeFromChar(step.m);
 		// Ensure unique IDs, offset by 1 since 0 is Start

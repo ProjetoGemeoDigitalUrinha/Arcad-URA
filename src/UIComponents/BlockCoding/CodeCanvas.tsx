@@ -1,6 +1,12 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import type React from "react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Box, Button, Stack, Typography } from "@mui/material";
+import ArrowDownwardIcon from "@mui/icons-material/ArrowDownward";
+import ArrowUpwardIcon from "@mui/icons-material/ArrowUpward";
+import StopCircleOutlinedIcon from "@mui/icons-material/StopCircleOutlined";
+import TurnLeftIcon from "@mui/icons-material/TurnLeft";
+import TurnRightIcon from "@mui/icons-material/TurnRight";
 import { ActionLabels } from "../../store/ActionsLabels";
 import { useStore } from "../../store/Store";
 
@@ -34,16 +40,27 @@ export const COLORS: Record<CommandType, string> = {
 	Stop: "#475569",
 };
 
-const TEMPLATES: CommandType[] = ["Forward", "Back", "Stop", "Left", "Right"];
+export const getCommandLabel = (type: CommandType) =>
+	({
+		Start: "Início",
+		Forward: "Avançar",
+		Back: "Recuar",
+		Left: "Esquerda",
+		Right: "Direita",
+		Stop: "Parar",
+	})[type];
+
 export const CodeCanvas: React.FC = () => {
 	// Read selections from store
 	const codeBlocks = useStore((s) => s.codeBlocks);
 	const setCodeBlocks = useStore((s) => s.setCodeBlocks);
 	const setBlockOrder = useStore((s) => s.setBlockOrder);
 	const addAction = useStore((s) => s.addAction);
+	const triggerAction = useStore((s) => s.triggerAction);
 
 	const canvasRef = useRef<HTMLCanvasElement | null>(null);
 	const containerRef = useRef<HTMLDivElement | null>(null);
+	const [canvasSize, setCanvasSize] = useState({ width: 0, height: 0 });
 
 	const [shapes, setShapes] = useState<CodeBlockShape[]>([
 		{
@@ -63,9 +80,7 @@ export const CodeCanvas: React.FC = () => {
 		id: number;
 		ox: number;
 		oy: number;
-		isNew: boolean;
-		startX: number;
-		startY: number;
+		transform: { x: number; y: number; scale: number };
 	} | null>(null);
 
 	const SNAP_THRESHOLD = 30;
@@ -111,6 +126,33 @@ export const CodeCanvas: React.FC = () => {
 		return thread;
 	}, [shapes]);
 
+	const canvasTransform = useMemo(() => {
+		const width = canvasSize.width;
+		const height = canvasSize.height;
+		if (shapes.length === 0 || width === 0 || height === 0) {
+			return { scale: 1, x: 0, y: 0 };
+		}
+
+		const minX = Math.min(...shapes.map((shape) => shape.x));
+		const maxX = Math.max(...shapes.map((shape) => shape.x + shape.width));
+		const minY = Math.min(...shapes.map((shape) => shape.y));
+		const maxY = Math.max(...shapes.map((shape) => shape.y + shape.height));
+		const contentWidth = maxX - minX;
+		const contentHeight = maxY - minY;
+		const scale = Math.min(
+			1,
+			(width - 72) / Math.max(contentWidth, 140),
+			(height - 72) / Math.max(contentHeight, 60),
+		);
+
+		return {
+			scale,
+			x: (width - contentWidth * scale) / 2 - minX * scale,
+			y: (height - contentHeight * scale) / 2 - minY * scale,
+		};
+	}, [canvasSize, shapes]);
+	const viewTransform = dragState?.transform ?? canvasTransform;
+
 	// --- PUSH LOCAL STATE TO STORE ---
 	useEffect(() => {
 		// Prevent pushing an empty array if shapes hasn't initialized fully
@@ -121,6 +163,42 @@ export const CodeCanvas: React.FC = () => {
 	}, [shapes, mainThread, setCodeBlocks, setBlockOrder]);
 
 	useEffect(() => {
+		addAction({
+			target: "canvasCode",
+			trigger: ActionLabels.ADD_CODE_BLOCK,
+			cb: (type: CommandType) => {
+				setShapes((prev) => {
+					let lastBlock = prev.find((shape) => shape.id === 0);
+					if (!lastBlock) return prev;
+
+					const visited = new Set<number>();
+					while (lastBlock.nextId != null && !visited.has(lastBlock.id)) {
+						visited.add(lastBlock.id);
+						const nextBlock = prev.find((shape) => shape.id === lastBlock?.nextId);
+						if (!nextBlock) break;
+						lastBlock = nextBlock;
+					}
+
+					const newId = Math.max(Date.now(), ...prev.map((shape) => shape.id + 1));
+					const newShape: CodeBlockShape = {
+						id: newId,
+						type,
+						value: 1000,
+						x: lastBlock.x + lastBlock.width + 36,
+						y: lastBlock.y,
+						width: 140,
+						height: 60,
+						color: COLORS[type],
+					};
+
+					return [
+						...prev.map((shape) => shape.id === lastBlock?.id ? { ...shape, nextId: newId } : shape),
+						newShape,
+					];
+				});
+			},
+		});
+
 		addAction({
 			target: "canvasCode",
 			trigger: ActionLabels.DELETE_CODE_BLOCK,
@@ -202,53 +280,39 @@ export const CodeCanvas: React.FC = () => {
 
 		ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
 		ctx.clearRect(0, 0, cw, ch);
-
-		// Draw Bottom Template Area (Spawn Area)
-		const boxWidth = 800;
-		const boxHeight = 120;
-		const boxX = (cw - boxWidth) / 2;
-		const boxY = ch - boxHeight - 40;
-
-		ctx.setLineDash([10, 8]);
+		ctx.fillStyle = "#f8fafc";
+		ctx.fillRect(0, 0, cw, ch);
+		ctx.fillStyle = "#f4f7fb";
 		ctx.strokeStyle = "#94a3b8";
-		ctx.lineWidth = 2;
+		ctx.lineWidth = 1;
 		ctx.beginPath();
-		ctx.roundRect(boxX, boxY, boxWidth, boxHeight, 20);
+		ctx.roundRect(20, 20, cw - 40, ch - 40, 8);
+		ctx.fill();
 		ctx.stroke();
-		ctx.setLineDash([]);
 
-		// Draw Templates
-		const gap = 150;
-		const startX =
-			boxX +
-			(boxWidth -
-				(TEMPLATES.length * 140 + (TEMPLATES.length - 1) * (gap - 140))) /
-				2;
+		for (let index = 0; index < mainThread.length - 1; index++) {
+			const current = shapes.find((shape) => shape.id === mainThread[index]);
+			const next = shapes.find((shape) => shape.id === mainThread[index + 1]);
+			if (!current || !next) continue;
 
-		TEMPLATES.forEach((type, index) => {
-			const tx = startX + index * gap;
-			const ty = boxY + 30;
-
+			const startX = viewTransform.x + (current.x + current.width) * viewTransform.scale;
+			const endX = viewTransform.x + next.x * viewTransform.scale;
+			const centerY = viewTransform.y + (current.y + current.height / 2) * viewTransform.scale;
 			ctx.save();
-			ctx.fillStyle = COLORS[type];
-			drawBlockPath(ctx, tx, ty, 140, 60, false);
-			ctx.fill();
-
-			// Dashed border for templates
-			ctx.setLineDash([4, 4]);
-			ctx.strokeStyle = "#000";
-			ctx.lineWidth = 1.5;
+			ctx.strokeStyle = "#64748b";
+			ctx.fillStyle = "#64748b";
+			ctx.lineWidth = 2;
+			ctx.beginPath();
+			ctx.moveTo(startX + 3, centerY);
+			ctx.lineTo(endX - 8, centerY);
 			ctx.stroke();
-
-			ctx.fillStyle = "#fff";
-			ctx.font = "bold 13px sans-serif";
-			ctx.textAlign = "center";
-			ctx.fillText(type.toUpperCase(), tx + 70, ty + 25);
-
-			ctx.font = "11px sans-serif";
-			ctx.fillText("1000ms", tx + 70, ty + 45);
+			ctx.beginPath();
+			ctx.moveTo(endX - 8, centerY - 5);
+			ctx.lineTo(endX, centerY);
+			ctx.lineTo(endX - 8, centerY + 5);
+			ctx.stroke();
 			ctx.restore();
-		});
+		}
 
 		// Draw Active Canvas Shapes
 		[...shapes]
@@ -265,32 +329,32 @@ export const CodeCanvas: React.FC = () => {
 				ctx.globalAlpha =
 					isMain || dragState?.id === s.id || s.id === 0 ? 1 : 0.4;
 
+				const x = viewTransform.x + s.x * viewTransform.scale;
+				const y = viewTransform.y + s.y * viewTransform.scale;
+				const width = s.width * viewTransform.scale;
+				const height = s.height * viewTransform.scale;
 				ctx.fillStyle = s.color;
-				drawBlockPath(ctx, s.x, s.y, s.width, s.height, s.type === "Start");
+				drawBlockPath(ctx, x, y, width, height, s.type === "Start");
 				ctx.fill();
 
 				// Active Blocks styling matching the image (dashed border for all active components)
 				ctx.setLineDash([4, 4]);
 				ctx.strokeStyle = "#000";
-				ctx.lineWidth = isMain ? 2.5 : 1.5;
+				ctx.lineWidth = isMain ? 2 : 1;
 				ctx.stroke();
 
 				ctx.fillStyle = "#fff";
-				ctx.font = "bold 13px sans-serif";
+				ctx.font = `bold ${Math.max(10, 13 * viewTransform.scale)}px sans-serif`;
 				ctx.textAlign = "center";
 				ctx.fillText(
-					s.type.toUpperCase(),
-					s.x + s.width / 2,
-					s.y + (s.id === 0 ? 35 : 25),
+					getCommandLabel(s.type).toUpperCase(),
+					x + width / 2,
+					y + (s.id === 0 ? 35 : 25) * viewTransform.scale,
 				);
 
-				if (s.id !== 0) {
-					ctx.font = "11px sans-serif";
-					ctx.fillText(`${s.value}ms`, s.x + s.width / 2, s.y + 45);
-				}
 				ctx.restore();
 			});
-	}, [shapes, mainThread, dragState]);
+	}, [shapes, mainThread, dragState, viewTransform]);
 
 	useEffect(() => {
 		const observer = new ResizeObserver(() => {
@@ -303,6 +367,11 @@ export const CodeCanvas: React.FC = () => {
 
 			const dpr = window.devicePixelRatio || 1;
 			const rect = container.getBoundingClientRect();
+			setCanvasSize((current) =>
+				current.width === rect.width && current.height === rect.height
+					? current
+					: { width: rect.width, height: rect.height },
+			);
 
 			if (
 				canvas.width !== rect.width * dpr ||
@@ -334,75 +403,9 @@ export const CodeCanvas: React.FC = () => {
 			return;
 		}
 		const rect = canvasRef.current.getBoundingClientRect();
-		const mx = e.clientX - rect.left;
-		const my = e.clientY - rect.top;
+		const mx = (e.clientX - rect.left - canvasTransform.x) / canvasTransform.scale;
+		const my = (e.clientY - rect.top - canvasTransform.y) / canvasTransform.scale;
 
-		const dpr = window.devicePixelRatio || 1;
-		const cw = canvasRef.current.width / dpr;
-		const ch = canvasRef.current.height / dpr;
-
-		// 1. Check if clicking on Templates (Spawn Area)
-		const boxWidth = 800;
-		const boxHeight = 120;
-		const boxX = (cw - boxWidth) / 2;
-		const boxY = ch - boxHeight - 40;
-		const gap = 150;
-		const startX =
-			boxX +
-			(boxWidth -
-				(TEMPLATES.length * 140 + (TEMPLATES.length - 1) * (gap - 140))) /
-				2;
-
-		if (
-			my >= boxY &&
-			my <= boxY + boxHeight &&
-			mx >= boxX &&
-			mx <= boxX + boxWidth
-		) {
-			let clickedTemplate: CommandType | null = null;
-			let tx = 0;
-			const ty = boxY + 30;
-
-			for (let i = 0; i < TEMPLATES.length; i++) {
-				const checkX = startX + i * gap;
-				if (mx >= checkX && mx <= checkX + 140 && my >= ty && my <= ty + 60) {
-					clickedTemplate = TEMPLATES[i];
-					tx = checkX;
-					break;
-				}
-			}
-
-			if (clickedTemplate) {
-				const newId = Date.now();
-				const newShape: CodeBlockShape = {
-					id: newId,
-					type: clickedTemplate,
-					value: 1000,
-					x: tx,
-					y: ty,
-					width: 140,
-					height: 60,
-					color: COLORS[clickedTemplate],
-					nextId: null,
-				};
-
-				setShapes((prev) => {
-					return [...prev, newShape];
-				});
-
-				setDragState({
-					id: newId,
-					ox: mx - tx,
-					oy: my - ty,
-					isNew: true,
-					startX: mx,
-					startY: my,
-				});
-				return;
-			}
-		}
-
-		// 2. Check if clicking on existing active shapes
 		const target = [...shapes].reverse().find((s) => {
 			return (
 				!s.isLocked &&
@@ -418,9 +421,7 @@ export const CodeCanvas: React.FC = () => {
 				id: target.id,
 				ox: mx - target.x,
 				oy: my - target.y,
-				isNew: false,
-				startX: mx,
-				startY: my,
+				transform: canvasTransform,
 			});
 		}
 	};
@@ -434,8 +435,8 @@ export const CodeCanvas: React.FC = () => {
 		const mx = e.clientX - rect.left;
 		const my = e.clientY - rect.top;
 
-		let nx = mx - dragState.ox;
-		let ny = my - dragState.oy;
+		let nx = (mx - dragState.transform.x) / dragState.transform.scale - dragState.ox;
+		let ny = (my - dragState.transform.y) / dragState.transform.scale - dragState.oy;
 
 		for (const o of shapes) {
 			if (o.id === dragState.id) {
@@ -463,59 +464,12 @@ export const CodeCanvas: React.FC = () => {
 		});
 	};
 
-	const handleMouseUp = (e: React.MouseEvent) => {
+	const handleMouseUp = () => {
 		if (!dragState || !canvasRef.current) {
 			return;
 		}
 
-		const rect = canvasRef.current.getBoundingClientRect();
-		const mx = e.clientX - rect.left;
-		const my = e.clientY - rect.top;
-
 		setShapes((prev) => {
-			// Logic for Template "Click to Append"
-			if (dragState.isNew) {
-				const distMoved = Math.sqrt(
-					(mx - dragState.startX) ** 2 + (my - dragState.startY) ** 2,
-				);
-
-				if (distMoved < 5) {
-					// Identify the last block in the flow chain
-					let currentId: number | null | undefined = 0;
-					let lastBlock = prev.find((s) => {
-						return s.id === 0;
-					});
-
-					while (currentId !== null && currentId !== undefined) {
-						const shape = prev.find((s) => {
-							return s.id === currentId;
-						});
-						if (!shape) {
-							break;
-						}
-						lastBlock = shape;
-						currentId = shape.nextId;
-					}
-
-					if (lastBlock) {
-						return prev.map((s) => {
-							if (s.id === lastBlock?.id) {
-								return { ...s, nextId: dragState.id };
-							}
-							if (s.id === dragState.id) {
-								return {
-									...s,
-									x: lastBlock.x + lastBlock.width,
-									y: lastBlock.y,
-								};
-							}
-							return s;
-						});
-					}
-				}
-			}
-
-			// Standard Drag & Drop Logic
 			const active = prev.find((s) => {
 				return s.id === dragState.id;
 			});
@@ -548,18 +502,79 @@ export const CodeCanvas: React.FC = () => {
 	};
 
 	return (
-		<div
-			className="flex-1 h-screen bg-[#f0f4f8] overflow-hidden relative"
-			ref={containerRef}
-		>
-			<canvas
-				ref={canvasRef}
-				onMouseDown={handleMouseDown}
-				onMouseMove={handleMouseMove}
-				onMouseUp={handleMouseUp}
-				onMouseLeave={handleMouseUp}
-				className="w-full h-full cursor-pointer"
-			/>
+		<div className="code-canvas-workspace">
+			<Box className="code-instructions">
+				<Typography variant="subtitle2" sx={{ fontWeight: 700 }}>Para programar o robô:</Typography>
+				<Typography variant="body2">Monte sua sequência de movimentos: escolha os blocos, defina o tempo de execução de cada ação e finalize com o bloco Parar.</Typography>
+			</Box>
+			<Typography className="code-flow-title" variant="subtitle2">Fluxo do programa</Typography>
+			<div className="code-canvas-frame" ref={containerRef}>
+				<canvas
+					ref={canvasRef}
+					onMouseDown={handleMouseDown}
+					onMouseMove={handleMouseMove}
+					onMouseUp={handleMouseUp}
+					onMouseLeave={handleMouseUp}
+					className="code-flow-canvas"
+				/>
+				<div className="code-canvas-duration-layer" style={{ width: canvasSize.width, height: canvasSize.height }}>
+					{shapes.filter((shape) => shape.id !== 0 && mainThread.includes(shape.id)).map((shape) => {
+						const scale = viewTransform.scale;
+						return (
+							<input
+								key={shape.id}
+								aria-label={`Duração de ${getCommandLabel(shape.type)}`}
+								type="number"
+								className="code-canvas-duration"
+								style={{
+									left: viewTransform.x + (shape.x + shape.width / 2) * scale - 28 * scale,
+									top: viewTransform.y + (shape.y + 34) * scale,
+									width: 56 * scale,
+									height: 18 * scale,
+									fontSize: Math.max(10, 12 * scale),
+								}}
+								value={shape.value}
+								onChange={(event) => triggerAction(ActionLabels.UPDATE_CODE_BLOCK_VALUES, "canvasCode", { id: shape.id, val: Number.parseInt(event.target.value, 10) || 0 })}
+							/>
+						);
+					})}
+				</div>
+				<Typography className="code-flow-estimate" variant="caption">Duração estimada: {Math.round(shapes.filter((shape) => mainThread.includes(shape.id) && shape.id !== 0).reduce((total, shape) => total + shape.value, 0) / 1000)} s</Typography>
+			</div>
 		</div>
+	);
+};
+
+export const CodeCommandPalette = () => {
+	const triggerAction = useStore((store) => store.triggerAction);
+	const commands = [
+		{ type: "Forward" as const, icon: <ArrowUpwardIcon />, color: "#3b82f6", hint: "Mover para frente" },
+		{ type: "Back" as const, icon: <ArrowDownwardIcon />, color: "#ef4444", hint: "Mover para trás" },
+		{ type: "Left" as const, icon: <TurnLeftIcon />, color: "#10b981", hint: "Virar à esquerda" },
+		{ type: "Right" as const, icon: <TurnRightIcon />, color: "#f59e0b", hint: "Virar à direita" },
+		{ type: "Stop" as const, icon: <StopCircleOutlinedIcon />, color: "#64748b", hint: "Interromper o movimento" },
+	];
+
+	return (
+		<Box className="code-command-palette">
+			<Typography variant="overline" sx={{ fontWeight: 700 }}>Comandos disponíveis</Typography>
+			<Typography variant="caption" color="text.secondary" sx={{ display: "block", mb: 2 }}>Clique para adicionar ao fluxo</Typography>
+			<Stack spacing={1.25}>
+				{commands.map((command) => (
+					<Button
+						key={command.type}
+						className="code-command-palette__button"
+						startIcon={command.icon}
+						onClick={() => triggerAction(ActionLabels.ADD_CODE_BLOCK, "canvasCode", command.type)}
+						sx={{ backgroundColor: command.color, "&:hover": { backgroundColor: command.color, filter: "brightness(.94)" } }}
+					>
+						<Box className="code-command-palette__label">
+							<strong>{getCommandLabel(command.type).toUpperCase()}</strong>
+							<small>{command.hint}</small>
+						</Box>
+					</Button>
+				))}
+			</Stack>
+		</Box>
 	);
 };

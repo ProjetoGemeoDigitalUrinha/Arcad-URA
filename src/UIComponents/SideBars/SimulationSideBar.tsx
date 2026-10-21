@@ -1,5 +1,12 @@
 /** biome-ignore-all lint/a11y/useButtonType: <explanation> */
 import { useEffect, useRef, useState } from "react";
+import { Accordion, AccordionDetails, AccordionSummary, Box, Button, Divider, Paper, Slider, Stack, TextField, Typography } from "@mui/material";
+import ExpandMoreIcon from "@mui/icons-material/ExpandMore";
+import FileDownloadOutlinedIcon from "@mui/icons-material/FileDownloadOutlined";
+import FileUploadOutlinedIcon from "@mui/icons-material/FileUploadOutlined";
+import PlayArrowIcon from "@mui/icons-material/PlayArrow";
+import RestartAltIcon from "@mui/icons-material/RestartAlt";
+import SummarizeOutlinedIcon from "@mui/icons-material/SummarizeOutlined";
 import type { SimulationPartConfig } from "../../store/AppSlice";
 import { useStore } from "../../store/Store";
 
@@ -15,29 +22,16 @@ const defaultPartValues: Record<string, SimulationPartConfig> = {
 	MT3608: { mA: 240, v: 6.5, value: -1 },
 };
 
-// Helper to prevent "forced digit" input issues
-const InputField = ({
-	value,
-	onChange,
-}: {
-	value: number;
-	onChange: (val: number) => void;
-}) => {
-	const [localValue, setLocalValue] = useState(value.toString());
-
-	useEffect(() => {
-		setLocalValue(value.toString());
-	}, [value]);
-
-	return (
-		<input
-			type="number"
-			value={localValue}
-			onChange={(e) => setLocalValue(e.target.value)}
-			onBlur={() => onChange(parseFloat(localValue) || 0)}
-			className="w-16 bg-white border border-gray-300 rounded-full text-center py-0.5 font-bold text-[13px] shadow-inner"
-		/>
-	);
+const PART_LABELS: Record<string, string> = {
+	"Wheel Left": "Roda esquerda",
+	"Wheel Right": "Roda direita",
+	"Motor Left": "Motor esquerdo",
+	"Motor Right": "Motor direito",
+	"HC-04": "Sensor ultrassônico HC-04",
+	"ESP-32": "ESP-32",
+	Battery: "Bateria",
+	MT3608: "MT3608",
+	L9110: "L9110",
 };
 
 export const SimulationSideBar = () => {
@@ -119,13 +113,11 @@ export const SimulationSideBar = () => {
 		// eslint-disable-next-line @typescript-eslint/no-explicit-any
 		const telemetry = (window as any).__LAST_TELEMETRY__;
 		if (!telemetry || telemetry.length === 0) {
-			alert("No simulation data found. Run a simulation first.");
+			alert("Não há dados de simulação. Execute uma simulação primeiro.");
 			return;
 		}
 
 		// Kinematics Calculation
-		const r = 3.5; // Wheel radius (7cm diameter)
-		const d = 14.0;
 		let x = 0,
 			y = 0,
 			theta = 0;
@@ -157,11 +149,11 @@ export const SimulationSideBar = () => {
                     </style>
                 </head>
                 <body>
-                    <h1>Simulation Report</h1>
+					<h1>Relatório da simulação</h1>
                     <canvas id="c" width="500" height="400"></canvas>
-                    <h2>Telemetry</h2>
+					<h2>Telemetria</h2>
                     <table>
-                        <tr><th>Command</th><th>Duration</th><th>mA</th><th>V</th></tr>
+						<tr><th>Comando</th><th>Duração</th><th>mA</th><th>V</th></tr>
                         ${telemetry.map((t: any) => `<tr><td>${t.command}</td><td>${t.duration}</td><td>${t.mA_draw}</td><td>${t.v_level}</td></tr>`).join("")}
                     </table>
                    <script>
@@ -201,130 +193,80 @@ export const SimulationSideBar = () => {
 	const currentPart =
 		simulationParts?.[selectedPart] || defaultPartValues[selectedPart];
 	const defaultPartInfo = defaultPartValues[selectedPart];
+	const selectedValueUnit = selectedPart === "HC-04"
+		? "cm"
+		: selectedPart.includes("Motor") || selectedPart.includes("Wheel")
+			? "RPM"
+			: "";
+	const selectedDescription = selectedPart === "HC-04"
+		? "Simula a distância detectada entre o robô e um obstáculo."
+		: selectedPart.includes("Motor") || selectedPart.includes("Wheel")
+			? "Ajuste a rotação para observar o comportamento do conjunto."
+			: "Ajuste os parâmetros elétricos deste componente.";
 
 	return (
-		<div className="w-full min-w-[320px] h-screen bg-[#d9d9d9] shadow-[-2px_0_5px_rgba(0,0,0,0.1)] flex flex-col items-center py-6 px-4 z-10 overflow-y-auto">
-			{/* Parts List */}
-			<div className="w-full bg-[#cecece] rounded-xl border border-gray-400 mb-6 h-[200px] flex flex-col">
-				<p className="text-center font-bold text-[13px] pt-3 pb-2">Parts</p>
-				<div className="flex flex-col overflow-y-auto flex-1">
+		<Stack className="simulation-panel" spacing={1.5}>
+			<Paper className="simulation-sidebar__section" elevation={0}>
+				<Stack direction="row" sx={{ justifyContent: "space-between", alignItems: "center", mb: 1.5 }}>
+					<Typography variant="subtitle1" sx={{ fontWeight: 700 }}>Sensores e atuadores</Typography>
+					<Typography variant="caption" color="text.secondary">9 componentes</Typography>
+				</Stack>
+				<Box className="simulation-sidebar__parts">
 					{partsList.map((part) => (
-						<button
-							key={part}
-							onClick={() => setSelectedPart(part)}
-							className={`w-full text-left px-4 py-1 font-bold text-[12px] ${selectedPart === part ? "bg-white" : ""}`}
-						>
-							{part}
-						</button>
+						<Button key={part} variant={selectedPart === part ? "contained" : "outlined"} onClick={() => setSelectedPart(part)}>
+							{PART_LABELS[part] ?? part}
+						</Button>
 					))}
-				</div>
-			</div>
+				</Box>
+			</Paper>
 
-			{/* Config Box */}
-			<div className="w-full bg-[#cecece] rounded-xl border-2 border-dashed border-gray-500 p-4 mb-6 flex flex-col items-center">
-				<p className="font-bold text-[14px] mb-4">{selectedPart}</p>
+			<Paper className="simulation-sidebar__section" elevation={0}>
+				<Typography variant="overline" sx={{ fontWeight: 700 }}>Componente selecionado</Typography>
+				<Typography variant="subtitle1" sx={{ fontWeight: 700 }}>{PART_LABELS[selectedPart] ?? selectedPart}</Typography>
+				<Typography variant="body2" color="text.secondary" sx={{ mb: 1.5 }}>{selectedDescription}</Typography>
 				{defaultPartInfo.value !== -1 && (
-					<div className="flex items-center gap-2 mb-4">
-						<span className="font-bold text-[13px]">Value:</span>
-						<InputField
+					<Box className="simulation-sidebar__value">
+						<Stack direction="row" sx={{ justifyContent: "space-between", alignItems: "baseline" }}>
+							<Typography variant="caption" sx={{ fontWeight: 700 }}>Valor simulado</Typography>
+							<Typography variant="caption">{selectedValueUnit}</Typography>
+						</Stack>
+						<Typography className="simulation-sidebar__value-number">{currentPart.value}</Typography>
+						<Slider
 							value={currentPart.value}
-							onChange={(v) => handleValueChange(v, "value")}
+							min={selectedPart === "HC-04" ? 0 : -255}
+							max={selectedPart === "HC-04" ? 100 : 255}
+							aria-label="Valor simulado"
+							onChange={(_event, value) => handleValueChange(Array.isArray(value) ? value[0] : value, "value")}
 						/>
-					</div>
+					</Box>
 				)}
-				{(defaultPartInfo.mA !== -1 || defaultPartInfo.v !== -1) && (
-					<div className="flex justify-between w-full px-2 mb-6">
-						{defaultPartInfo.mA !== -1 && (
-							<div className="flex items-center gap-2">
-								<span className="font-bold text-[13px]">mA:</span>
-								<InputField
-									value={currentPart.mA}
-									onChange={(v) => handleValueChange(v, "mA")}
-								/>
-							</div>
-						)}
-						{defaultPartInfo.v !== -1 && (
-							<div className="flex items-center gap-2">
-								<span className="font-bold text-[13px]">V:</span>
-								<InputField
-									value={currentPart.v}
-									onChange={(v) => handleValueChange(v, "v")}
-								/>
-							</div>
-						)}
-					</div>
-				)}
-				<button
-					onClick={handleResetToDefault}
-					className="w-full border-2 border-black rounded-full py-1 text-[10px] font-bold uppercase hover:bg-black hover:text-white"
-				>
-					Reset
-				</button>
-			</div>
+				<Stack direction="row" spacing={1} sx={{ mt: 1.5 }}>
+					{defaultPartInfo.mA !== -1 && <TextField label="Corrente (mA)" type="number" size="small" value={currentPart.mA} onChange={(e) => handleValueChange(Number(e.target.value), "mA")} />}
+					{defaultPartInfo.v !== -1 && <TextField label="Tensão (V)" type="number" size="small" value={currentPart.v} onChange={(e) => handleValueChange(Number(e.target.value), "v")} />}
+				</Stack>
+				<Button variant="outlined" startIcon={<RestartAltIcon />} fullWidth sx={{ mt: 1.5 }} onClick={handleResetToDefault}>Restaurar valores padrão</Button>
+			</Paper>
 
-			{/* Report */}
-			<div className="w-full bg-[#cecece] rounded-xl border border-gray-400 p-3 mb-4">
-				<p className="text-center font-bold text-[13px] mb-3">REPORT</p>
-				<button
-					onClick={generatePDFReport}
-					disabled={!hasReportData}
-					className="w-full border-2 border-black rounded-full py-1 text-[11px] font-bold uppercase hover:bg-black hover:text-white disabled:opacity-50"
-				>
-					View & Export
-				</button>
-			</div>
+			<Accordion className="simulation-sidebar__accordion" disableGutters>
+				<AccordionSummary expandIcon={<ExpandMoreIcon />}><Stack direction="row" spacing={1} sx={{ alignItems: "center" }}><SummarizeOutlinedIcon fontSize="small" /><Typography>Relatório</Typography></Stack></AccordionSummary>
+				<AccordionDetails>
+					<Button variant="outlined" startIcon={<FileDownloadOutlinedIcon />} fullWidth disabled={!hasReportData} onClick={generatePDFReport}>Ver e exportar relatório</Button>
+				</AccordionDetails>
+			</Accordion>
 
-			{/* Recorded/Code Buttons */}
-			<div className="w-full bg-[#cecece] rounded-xl border border-gray-400 p-3 mb-4">
-				<p className="text-center font-bold text-[13px] mb-3">RECORDED</p>
-				<div className="flex gap-2">
-					<button
-						disabled={!hasRecordedCommands}
-						onClick={() =>
-							window.dispatchEvent(new CustomEvent("SIM_RUN_RECORDED"))
-						}
-						className="flex-1 border-2 border-black rounded-full py-1 text-[11px] font-bold uppercase"
-					>
-						Re-Run
-					</button>
-					<button
-						disabled={!hasRecordedCommands}
-						onClick={() =>
-							window.dispatchEvent(new CustomEvent("SIM_EXPORT_RECORDED"))
-						}
-						className="flex-1 border-2 border-black rounded-full py-1 text-[11px] font-bold uppercase"
-					>
-						Export
-					</button>
-				</div>
-			</div>
-
-			<div className="w-full bg-[#cecece] rounded-xl border border-gray-400 p-3">
-				<p className="text-center font-bold text-[13px] mb-3">CODE</p>
-				<div className="flex gap-2">
-					<button
-						disabled={!hasImportedCode}
-						onClick={() =>
-							window.dispatchEvent(new CustomEvent("SIM_RUN_CODE"))
-						}
-						className="flex-1 border-2 border-black rounded-full py-1 text-[11px] font-bold uppercase"
-					>
-						Run
-					</button>
-					<button
-						onClick={() => fileInputRef.current?.click()}
-						className="flex-1 border-2 border-black rounded-full py-1 text-[11px] font-bold uppercase"
-					>
-						Import
-					</button>
-					<input
-						type="file"
-						ref={fileInputRef}
-						className="hidden"
-						onChange={handleImportCode}
-					/>
-				</div>
-			</div>
-		</div>
+			<Accordion className="simulation-sidebar__accordion" disableGutters>
+				<AccordionSummary expandIcon={<ExpandMoreIcon />}><Typography>Gravações e programas</Typography></AccordionSummary>
+				<AccordionDetails>
+					<Stack spacing={1}>
+						<Button variant="outlined" startIcon={<PlayArrowIcon />} disabled={!hasRecordedCommands} onClick={() => window.dispatchEvent(new CustomEvent("SIM_RUN_RECORDED"))}>Executar gravação</Button>
+						<Button variant="text" startIcon={<FileDownloadOutlinedIcon />} disabled={!hasRecordedCommands} onClick={() => window.dispatchEvent(new CustomEvent("SIM_EXPORT_RECORDED"))}>Exportar gravação</Button>
+						<Divider />
+						<Button variant="contained" startIcon={<PlayArrowIcon />} disabled={!hasImportedCode} onClick={() => window.dispatchEvent(new CustomEvent("SIM_RUN_CODE"))}>Executar programa</Button>
+						<Button variant="outlined" startIcon={<FileUploadOutlinedIcon />} onClick={() => fileInputRef.current?.click()}>Importar programa</Button>
+						<input type="file" ref={fileInputRef} hidden onChange={handleImportCode} />
+					</Stack>
+				</AccordionDetails>
+			</Accordion>
+		</Stack>
 	);
 };

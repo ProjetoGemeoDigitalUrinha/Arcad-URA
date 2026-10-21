@@ -1,4 +1,4 @@
-import { CodeBlockShape } from "./CodeCanvas";
+import { CodeBlockShape, getCommandLabel } from "./CodeCanvas";
 
 export const ShapeItem: React.FC<{
   shape: CodeBlockShape;
@@ -11,7 +11,7 @@ export const ShapeItem: React.FC<{
     style={{ borderLeft: `4px solid ${shape.color}` }}
   >
     <div className="shape-info">
-      <span className="id-badge">{shape.type.toUpperCase()}</span>
+      <span className="id-badge">{getCommandLabel(shape.type).toUpperCase()}</span>
       {shape.type !== "Start" && (
         <input
           type="number"

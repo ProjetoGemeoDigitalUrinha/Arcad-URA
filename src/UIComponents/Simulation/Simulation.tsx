@@ -1,7 +1,18 @@
 /** biome-ignore-all lint/suspicious/noArrayIndexKey: <explanation> */
 /** biome-ignore-all lint/a11y/noStaticElementInteractions: <explanation> */
 import { useCallback, useEffect, useState } from "react";
+import { Alert, Button, Dialog, DialogActions, DialogContent, DialogTitle, Divider, IconButton, Stack, Tooltip, Typography } from "@mui/material";
+import ArrowDownwardIcon from "@mui/icons-material/ArrowDownward";
+import ArrowBackIcon from "@mui/icons-material/ArrowBack";
+import ArrowForwardIcon from "@mui/icons-material/ArrowForward";
+import ArrowUpwardIcon from "@mui/icons-material/ArrowUpward";
+import CodeOutlinedIcon from "@mui/icons-material/CodeOutlined";
+import DeleteOutlineIcon from "@mui/icons-material/DeleteOutlined";
+import SendIcon from "@mui/icons-material/Send";
+import StopIcon from "@mui/icons-material/Stop";
 import { useStore } from "../../store/Store";
+import { ActionLabels } from "../../store/ActionsLabels";
+import { ConvertJSONToCodeBlocks } from "../../utils/ConvertCodeBlock";
 
 // Default fallbacks to prevent crashes if the store isn't populated yet
 const defaultPartValues: Record<string, any> = {
@@ -14,6 +25,31 @@ const defaultPartValues: Record<string, any> = {
 	"ESP-32": { mA: 240, v: 6.5, value: 1 },
 	Battery: { mA: 5000, v: 3.7, value: -1 },
 	MT3608: { mA: 240, v: 6.5, value: -1 },
+};
+
+const PART_LABELS: Record<string, string> = {
+	"Wheel Left": "Roda esquerda",
+	"Wheel Right": "Roda direita",
+	"Motor Left": "Motor esquerdo",
+	"Motor Right": "Motor direito",
+	"HC-04": "Sensor ultrassônico",
+	"ESP-32": "ESP-32",
+	Battery: "Bateria",
+	MT3608: "MT3608",
+	L9110: "L9110",
+};
+
+const MEASUREMENT_LABELS: Record<string, string> = {
+	RPM: "Rotação",
+	Distance: "Distância",
+};
+
+const COMMAND_LABELS: Record<string, string> = {
+	F: "Avançar",
+	B: "Recuar",
+	L: "Virar à esquerda",
+	R: "Virar à direita",
+	S: "Parar",
 };
 
 const Connection = ({
@@ -86,11 +122,11 @@ const Node = ({ title, top, left, state, label }: any) => {
 			style={{ top, left }}
 		>
 			<h4 className="w-full text-center border-b border-black/20 pb-1 mb-1 whitespace-nowrap">
-				{title}
+				{PART_LABELS[title] ?? title}
 			</h4>
 			{label && partData.value !== -1 && (
 				<p>
-					{label}: {displayVal}
+					{MEASUREMENT_LABELS[label] ?? label}: {displayVal}
 				</p>
 			)}
 			{partData.mA !== -1 && <p>mA: {partData.mA}</p>}
@@ -103,6 +139,11 @@ export default function Simulation() {
 	const { simulationParts } = useStore((store) => {
 		return store;
 	});
+	const setCodeBlocks = useStore((store) => store.setCodeBlocks);
+	const setBlockOrder = useStore((store) => store.setBlockOrder);
+	const setMode = useStore((store) => store.setMode);
+	const mqttInstance = useStore((store) => store.mqttInstance);
+	const triggerAction = useStore((store) => store.triggerAction);
 
 	const [glitchTicker, setGlitchTicker] = useState(0);
 	const [isExecuting, setIsExecuting] = useState(false);
@@ -114,6 +155,7 @@ export default function Simulation() {
 		[],
 	);
 	const [isRecording, setIsRecording] = useState(false);
+	const [sendDialogOpen, setSendDialogOpen] = useState(false);
 
 	// Forces a fast re-render to simulate fluctuating values during a brownout
 	useEffect(() => {
@@ -186,7 +228,7 @@ export default function Simulation() {
 			if (isExecuting) {
 				setIsExecuting(false);
 				console.warn(
-					"Hardware Crash: Lost power during execution due to insufficient mA.",
+					"Falha de hardware: energia insuficiente durante a execução.",
 				);
 			}
 		}
@@ -196,7 +238,7 @@ export default function Simulation() {
 	const executeSequence = useCallback(
 		async (commands: { m: string; t: number }[]) => {
 			if (esp32State !== "normal" || l9110State !== "normal") {
-				alert("Hardware Error: Check power supply limits.");
+				alert("Falha de hardware: verifique os limites da fonte de alimentação.");
 				return;
 			}
 
@@ -274,7 +316,7 @@ export default function Simulation() {
 				);
 			const anchor = document.createElement("a");
 			anchor.setAttribute("href", dataStr);
-			anchor.setAttribute("download", "recorded_commands.json");
+			anchor.setAttribute("download", "comandos_gravados.json");
 			document.body.appendChild(anchor);
 			anchor.click();
 			anchor.remove();
@@ -353,24 +395,62 @@ export default function Simulation() {
 		});
 	};
 
+	const removeRecordedCommand = (commandIndex: number) => {
+		setRecordedCommands((commands) => commands.filter((_, index) => index !== commandIndex));
+	};
+
+	const clearRecordedCommands = () => {
+		setRecordedCommands([]);
+		// eslint-disable-next-line @typescript-eslint/no-explicit-any
+		(window as any).__LAST_TELEMETRY__ = null;
+	};
+
+	const convertRecordedCommands = () => {
+		const steps = recordedCommands.at(-1)?.m === "S"
+			? recordedCommands
+			: [...recordedCommands, { m: "S", t: 0 }];
+		const converted = ConvertJSONToCodeBlocks({ mode: "code", steps });
+		setCodeBlocks(converted.shapes);
+		setBlockOrder(converted.blockOrder);
+		setMode("code");
+	};
+
+	const sendRecordedCommands = () => {
+		if (!mqttInstance?.connected) {
+			setSendDialogOpen(false);
+			triggerAction(ActionLabels.TOGGLE_MQTT_CONNECTION_MODAL, "mqttConnectionModal");
+			return;
+		}
+
+		mqttInstance.publish("arcad/publish", JSON.stringify({ mode: "code", steps: recordedCommands }));
+		setSendDialogOpen(false);
+	};
+
 	const hasMainPower = batteryV > 0;
 	const mtPowerActive = mt3608State !== "off";
 	const espPowerActive = esp32State !== "off";
 	const l91PowerActive = l9110State !== "off";
+	const batteryPercentage = Math.min(100, Math.max(0, Math.round((batteryV / 3.7) * 100)));
+	const cpuPercentage = isExecuting ? 68 : 12;
 
 	return (
-		<div className="flex-1 relative bg-[#f0f4f8] font-sans overflow-hidden h-screen">
-			<div className="absolute inset-0 flex justify-center items-center">
+		<div className="simulation-layout">
+			<div className="simulation-visual">
+				<div className="simulation-metrics">
+					<span>BATERIA <strong>{batteryPercentage}%</strong></span>
+					<span>CPU <strong>{cpuPercentage}%</strong></span>
+				</div>
+			<div style={{ position: "absolute", inset: 0, display: "flex", justifyContent: "center", alignItems: "center" }}>
 				<img
 					src="/robotVector 1.png"
-					alt="Robot Chassis"
+					alt="Chassi do robô"
 					className="robot-chassis-image"
 				/>
 			</div>
 
 			{/* SVG Connections Layer */}
 			<svg className="absolute inset-0 w-full h-full z-0 pointer-events-none">
-				<title>Connections</title>
+				<title>Conexões</title>
 				<Connection x1="25%" y1="78%" x2="35%" y2="64%" active={hasMainPower} />
 				<Connection
 					x1="35%"
@@ -470,126 +550,65 @@ export default function Simulation() {
 			<Node title="MT3608" top="64%" left="36%" state={mt3608State} />
 			<Node title="L9110" top="61%" left="50%" state={l9110State} />
 			<Node title="Battery" top="80%" left="25%" state={l9110State} />
-
-			{/* OVERLAYS: Recorded Commands & D-PAD */}
-			<div className="absolute bottom-6 right-6 flex gap-4 z-20">
-				{/* Current Recorded Commands Box */}
-				<div className="w-[200px] h-[140px] border-2 border-dashed border-gray-800 bg-white rounded-xl shadow-lg flex flex-col items-center p-3 overflow-y-auto">
-					<p className="text-[10px] font-bold text-center tracking-tight uppercase mb-4 sticky top-0 bg-white w-full border-b pb-1">
-						Current Recorded
-					</p>
-					{recordedCommands.length === 0 ? (
-						<span className="text-[10px] font-bold text-gray-500 m-auto">
-							No recorded commands
-						</span>
-					) : (
-						<div className="flex flex-col w-full gap-1">
-							{recordedCommands.map((cmd, i) => {
-								return (
-									<div
-										key={i}
-										className="text-[10px] font-mono flex justify-between bg-gray-100 px-2 py-1 rounded"
-									>
-										<span>{cmd.m}</span>
-										<span>{cmd.t}ms</span>
-									</div>
-								);
-							})}
-						</div>
-					)}
-				</div>
-
-				{/* D-Pad Controls Box */}
-				<div className="w-[200px] border-2 border-dashed border-gray-800 bg-white rounded-xl shadow-lg p-3 flex flex-col items-center">
-					<div className="flex justify-between w-full px-4 mb-4">
-						<button
-							type="button"
-							onClick={toggleRecording}
-							className={`flex flex-col items-center gap-1 hover:opacity-70 ${
-								isRecording ? "text-red-500" : ""
-							}`}
-						>
-							<div
-								className={`w-6 h-6 border-2 rounded-full flex justify-center items-center ${
-									isRecording ? "border-red-500" : "border-black"
-								}`}
-							>
-								<div
-									className={`w-3 h-3 rounded-full ${
-										isRecording ? "bg-red-500" : "bg-black"
-									}`}
-								></div>
-							</div>
-							<span className="text-[9px] font-bold">
-								{isRecording ? "RECORDING" : "RECORD"}
-							</span>
-						</button>
-						<button
-							type="button"
-							onClick={() => {
-								setRecordedCommands([]);
-								// eslint-disable-next-line @typescript-eslint/no-explicit-any
-								(window as any).__LAST_TELEMETRY__ = null;
-							}}
-							className="flex flex-col items-center gap-1 hover:opacity-70"
-						>
-							<div className="w-6 h-6 border-2 border-black rounded-sm flex justify-center items-center">
-								<div className="w-3 h-3 bg-black"></div>
-							</div>
-							<span className="text-[9px] font-bold">CLEAR</span>
-						</button>
-					</div>
-
-					{/* D-Pad Arrows */}
-					<div className="relative w-28 h-28 mt-2">
-						<div
-							onMouseDown={() => {
-								handlePress("S");
-							}}
-							className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 flex items-center justify-center w-8 h-8 bg-black rounded-full cursor-pointer hover:scale-105 z-10 shadow-[0px_2px_4px_rgba(0,0,0,0.3)]"
-						>
-							<div className="w-3 h-3 bg-white rounded-sm"></div>
-						</div>
-
-						<div
-							onMouseDown={() => {
-								handlePress("F");
-							}}
-							className="absolute top-0 left-1/2 -translate-x-1/2 -translate-y-2 flex flex-col items-center cursor-pointer hover:opacity-70"
-						>
-							<div className="w-0 h-0 border-l-[12px] border-r-[12px] border-b-[16px] border-l-transparent border-r-transparent border-b-black"></div>
-							<span className="text-[8px] font-bold mt-0.5">FORWARD</span>
-						</div>
-						<div
-							onMouseDown={() => {
-								handlePress("B");
-							}}
-							className="absolute bottom-0 left-1/2 -translate-x-1/2 translate-y-2 flex flex-col items-center cursor-pointer hover:opacity-70"
-						>
-							<span className="text-[8px] font-bold mb-0.5">BACKWARD</span>
-							<div className="w-0 h-0 border-l-[12px] border-r-[12px] border-t-[16px] border-l-transparent border-r-transparent border-t-black"></div>
-						</div>
-						<div
-							onMouseDown={() => {
-								handlePress("L");
-							}}
-							className="absolute top-1/2 left-0 -translate-x-4 -translate-y-1/2 flex items-center gap-1 cursor-pointer hover:opacity-70"
-						>
-							<span className="text-[8px] font-bold">LEFT</span>
-							<div className="w-0 h-0 border-t-[12px] border-b-[12px] border-r-[16px] border-t-transparent border-b-transparent border-r-black"></div>
-						</div>
-						<div
-							onMouseDown={() => {
-								handlePress("R");
-							}}
-							className="absolute top-1/2 right-0 translate-x-4 -translate-y-1/2 flex items-center gap-1 cursor-pointer hover:opacity-70"
-						>
-							<div className="w-0 h-0 border-t-[12px] border-b-[12px] border-l-[16px] border-t-transparent border-b-transparent border-l-black"></div>
-							<span className="text-[8px] font-bold">RIGHT</span>
-						</div>
-					</div>
-				</div>
 			</div>
+
+			<aside className="simulation-controls">
+				<div className="simulation-controls__actions">
+					<header className="simulation-controls__header">
+						<Typography variant="subtitle2" sx={{ fontWeight: 700 }}>CONTROLE E GRAVAÇÃO</Typography>
+						<Typography variant="caption" color="text.secondary">Clique nas setas para registrar movimentos</Typography>
+					</header>
+					<div className="simulation-controls__pad">
+						<div className="simulation-dpad" aria-label="Controles direcionais do robô">
+							<IconButton aria-label="Avançar" className="simulation-dpad__up" disabled={!isRecording} onClick={() => handlePress("F")}><ArrowUpwardIcon /></IconButton>
+							<IconButton aria-label="Virar à esquerda" className="simulation-dpad__left" disabled={!isRecording} onClick={() => handlePress("L")}><ArrowBackIcon /></IconButton>
+							<IconButton aria-label="Parar" className="simulation-dpad__stop" disabled={!isRecording} onClick={() => handlePress("S")}><StopIcon /></IconButton>
+							<IconButton aria-label="Virar à direita" className="simulation-dpad__right" disabled={!isRecording} onClick={() => handlePress("R")}><ArrowForwardIcon /></IconButton>
+							<IconButton aria-label="Recuar" className="simulation-dpad__down" disabled={!isRecording} onClick={() => handlePress("B")}><ArrowDownwardIcon /></IconButton>
+						</div>
+					</div>
+					<Stack className="simulation-record-actions" direction="row" spacing={1}>
+						<Button variant="outlined" color={isRecording ? "error" : "primary"} onClick={() => { if (!isRecording) toggleRecording(); }} disabled={isRecording}>Gravar comandos</Button>
+						<Button variant="outlined" startIcon={<StopIcon />} onClick={() => { if (isRecording) toggleRecording(); }} disabled={!isRecording}>Parar gravação</Button>
+					</Stack>
+					<Divider />
+					<section className="simulation-controls__recorded">
+						<Stack direction="row" sx={{ alignItems: "center", justifyContent: "space-between", mb: 1 }}>
+							<Typography variant="overline" sx={{ fontWeight: 700 }}>Comandos de registro atual</Typography>
+							<Tooltip title="Limpar comandos">
+								<span><IconButton aria-label="Limpar comandos" size="small" onClick={clearRecordedCommands} disabled={recordedCommands.length === 0}><DeleteOutlineIcon fontSize="small" /></IconButton></span>
+							</Tooltip>
+						</Stack>
+						<div className="simulation-recorded-list">
+							{recordedCommands.length === 0 ? (
+								<Typography variant="caption" color="text.secondary">Nenhum comando gravado. Pressione Gravar e use os controles.</Typography>
+							) : recordedCommands.map((command, index) => (
+								<div className="simulation-recorded-item" key={`${command.m}-${index}`}>
+									<Typography variant="caption">{COMMAND_LABELS[command.m] ?? command.m}</Typography>
+									<Typography variant="caption" color="text.secondary">{command.t / 1000} s</Typography>
+									<IconButton aria-label={`Remover ${COMMAND_LABELS[command.m] ?? "comando"}`} size="small" onClick={() => removeRecordedCommand(index)}><DeleteOutlineIcon fontSize="small" /></IconButton>
+								</div>
+							))}
+						</div>
+					</section>
+					<Stack className="simulation-program-actions" direction="row" spacing={1}>
+						<Button variant="outlined" startIcon={<CodeOutlinedIcon />} disabled={!recordedCommands.length} onClick={convertRecordedCommands}>Converter em código</Button>
+						<Button variant="contained" startIcon={<SendIcon />} disabled={!recordedCommands.length} onClick={() => setSendDialogOpen(true)}>Enviar</Button>
+					</Stack>
+				</div>
+			</aside>
+			<Dialog open={sendDialogOpen} onClose={() => setSendDialogOpen(false)} fullWidth maxWidth="sm">
+				<DialogTitle>Enviar programa ao robô físico?</DialogTitle>
+				<DialogContent>
+					<Alert severity="warning" sx={{ mb: 2 }}>Esta ação pode movimentar o hardware conectado. Verifique a área ao redor do robô antes de continuar.</Alert>
+					<Typography>O programa contém {recordedCommands.length} comandos e tem duração estimada de {Math.round(recordedCommands.reduce((duration, command) => duration + command.t, 0) / 1000)} segundos.</Typography>
+					{!mqttInstance?.connected && <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>Será necessário configurar a conexão MQTT antes do envio.</Typography>}
+				</DialogContent>
+				<DialogActions>
+					<Button onClick={() => setSendDialogOpen(false)}>Cancelar</Button>
+					<Button variant="contained" onClick={sendRecordedCommands}>Confirmar envio</Button>
+				</DialogActions>
+			</Dialog>
 		</div>
 	);
 }

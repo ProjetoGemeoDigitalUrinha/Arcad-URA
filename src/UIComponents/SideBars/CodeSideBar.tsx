@@ -1,4 +1,13 @@
 import type { ChangeEvent } from "react";
+import { useState } from "react";
+import { Accordion, AccordionDetails, AccordionSummary, Alert, Button, Chip, Dialog, DialogActions, DialogContent, DialogTitle, Divider, Stack, Typography } from "@mui/material";
+import CheckCircleOutlinedIcon from "@mui/icons-material/CheckCircleOutlined";
+import DeviceHubIcon from "@mui/icons-material/DeviceHub";
+import ExpandMoreIcon from "@mui/icons-material/ExpandMore";
+import FileDownloadOutlinedIcon from "@mui/icons-material/FileDownloadOutlined";
+import FileUploadOutlinedIcon from "@mui/icons-material/FileUploadOutlined";
+import PlayArrowIcon from "@mui/icons-material/PlayArrow";
+import SaveOutlinedIcon from "@mui/icons-material/SaveOutlined";
 import { ActionLabels } from "../../store/ActionsLabels";
 import { useStore } from "../../store/Store";
 import {
@@ -14,13 +23,44 @@ export const CodeSideBar = () => {
 	const setBlockOrder = useStore((s) => s.setBlockOrder);
 	const triggerAction = useStore((s) => s.triggerAction);
 	const mqttInstance = useStore((s) => s.mqttInstance);
+	const setMode = useStore((s) => s.setMode);
+	const [validationAttempted, setValidationAttempted] = useState(false);
+	const [isValid, setIsValid] = useState(false);
+	const [sendDialogOpen, setSendDialogOpen] = useState(false);
+	const lastBlock = shapes.find((shape) => shape.id === blockOrder[blockOrder.length - 1]);
+	const totalDuration = shapes
+		.filter((shape) => blockOrder.includes(shape.id) && shape.id !== 0)
+		.reduce((duration, shape) => duration + shape.value, 0);
 
-	const HandleRunCode = () => {
+	const HandleConfirmSend = () => {
 		const json = ConvertCodeBlockToJSON(blockOrder, shapes);
 
 		if (mqttInstance) {
 			mqttInstance.publish("arcad/publish", JSON.stringify(json));
 		}
+		setSendDialogOpen(false);
+	};
+
+	const HandleSendClick = () => {
+		if (!mqttInstance?.connected) {
+			triggerAction(ActionLabels.TOGGLE_MQTT_CONNECTION_MODAL, "mqttConnectionModal");
+			return;
+		}
+		setSendDialogOpen(true);
+	};
+
+	const HandleValidate = () => {
+		const valid = blockOrder.length > 1 && lastBlock?.type === "Stop";
+		setValidationAttempted(true);
+		setIsValid(valid);
+	};
+
+	const HandleTestSimulation = () => {
+		const program = ConvertCodeBlockToJSON(blockOrder, shapes);
+		setMode("simulation");
+		window.setTimeout(() => {
+			window.dispatchEvent(new CustomEvent("SIM_LOAD_CODE", { detail: program }));
+		}, 0);
 	};
 
 	const HandleImport = (event: ChangeEvent<HTMLInputElement>) => {
@@ -41,7 +81,7 @@ export const CodeSideBar = () => {
 				};
 
 				if (parsedData.mode !== "code") {
-					throw new Error("Invalid JSON mode. Expected 'code'.");
+					throw new Error("Modo de arquivo inválido. Era esperado 'code'.");
 				}
 
 				const { shapes, blockOrder } = ConvertJSONToCodeBlocks(parsedData);
@@ -49,12 +89,12 @@ export const CodeSideBar = () => {
 				setCodeBlocks(shapes);
 				setBlockOrder(blockOrder);
 			} catch (error) {
-				console.error("Failed to parse the code block JSON file", error);
+				console.error("Não foi possível interpretar o arquivo de blocos.", error);
 			}
 		};
 
 		reader.onerror = () => {
-			console.error("Failed to read the file");
+			console.error("Não foi possível ler o arquivo.");
 		};
 
 		reader.readAsText(file);
@@ -83,119 +123,57 @@ export const CodeSideBar = () => {
 	};
 
 	return (
-		<div className="w-full h-screen bg-[#d9d9d9] flex flex-col pt-6 pb-4 px-4 font-sans text-black shadow-[-2px_0_5px_rgba(0,0,0,0.1)] z-10">
-			<p className="text-center font-bold text-[18px] mb-6 tracking-tight">
-				Program Flow
-			</p>
-
-			{/* Block List Section */}
-			<div className="flex-1 overflow-y-auto pr-2 flex flex-col gap-3">
-				{blockOrder.map((id) => {
-					const s = shapes.find((shape) => {
-						return shape.id === id;
-					});
-
-					if (!s || s.id === 0) {
-						return null;
-					}
-
-					return (
-						<div
-							key={s.id}
-							className="w-full flex items-center justify-between rounded-md p-3 shadow-sm border-2 border-dashed bg-[#d9d9d9]"
-							style={{ borderColor: s.color }}
-						>
-							<div className="flex flex-col items-center justify-center w-full gap-1">
-								<span className="font-bold text-[13px] tracking-wide text-black">
-									{s.type.toUpperCase()}
-								</span>
-
-								<div className="flex items-center justify-center gap-1 bg-white rounded-full px-3 py-0.5 shadow-inner">
-									<input
-										type="number"
-										className="w-12 text-center text-[12px] font-bold outline-none bg-transparent"
-										value={s.value}
-										onChange={(e) => {
-											triggerAction(
-												ActionLabels.UPDATE_CODE_BLOCK_VALUES,
-												"canvasCode",
-												{ id: s.id, val: parseInt(e.target.value, 10) || 0 },
-											);
-										}}
-									/>
-									<span className="text-[12px] font-bold text-gray-500">
-										ms
-									</span>
-								</div>
-							</div>
-
-							<button
-								type="button"
-								className="absolute right-6 flex items-center justify-center w-6 h-6 hover:opacity-70 transition-opacity"
-								onClick={() => {
-									triggerAction(
-										ActionLabels.DELETE_CODE_BLOCK,
-										"canvasCode",
-										s.id,
-									);
-								}}
-							>
-								<svg
-									xmlns="http://www.w3.org/2000/svg"
-									width="16"
-									height="16"
-									viewBox="0 0 24 24"
-									fill="none"
-									stroke="#ef4444"
-									strokeWidth="2.5"
-									strokeLinecap="round"
-									strokeLinejoin="round"
-								>
-									<title>TrashIcon</title>
-									<path d="M3 6h18"></path>
-									<path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>
-								</svg>
-							</button>
-						</div>
-					);
-				})}
+		<div className="code-panel">
+			<Stack sx={{ justifyContent: "space-between" }}>
+				<Typography variant="subtitle2" sx={{ fontWeight: 700 }}>Status do programa</Typography>
+				<Chip size="small" label={mqttInstance?.connected ? "Robô conectado" : "Desconectado"} color={mqttInstance?.connected ? "success" : "default"} />
+			</Stack>
+			{validationAttempted && isValid ? (
+				<Alert severity="success" icon={<CheckCircleOutlinedIcon />}>Sequência válida</Alert>
+			) : (
+				<Alert severity={validationAttempted ? "warning" : "info"}>
+					{validationAttempted ? "Finalize o fluxo com o bloco Parar." : "Valide o fluxo antes de executar."}
+				</Alert>
+			)}
+			<Stack spacing={1.25}>
+				<Button variant="outlined" startIcon={<CheckCircleOutlinedIcon />} onClick={HandleValidate}>Validar programa</Button>
+				<Button variant="contained" color="info" startIcon={<PlayArrowIcon />} onClick={HandleTestSimulation} disabled={!isValid}>Testar na simulação</Button>
+				<Button variant="contained" startIcon={<DeviceHubIcon />} onClick={HandleSendClick} disabled={!isValid}>Enviar ao robô físico</Button>
+			</Stack>
+			<div className="code-panel__footer">
+				<Divider sx={{ mb: 2 }} />
+				<Stack spacing={1.5}>
+					<Stack sx={{ justifyContent: "space-between", alignItems: "center" }}>
+						<Typography variant="caption">Duração total</Typography>
+						<Typography variant="caption" sx={{ fontWeight: 700 }}>{Math.round(totalDuration / 1000)} s</Typography>
+					</Stack>
+					<Stack sx={{ justifyContent: "space-between", alignItems: "center" }}>
+						<Typography variant="caption">Dados</Typography>
+						<Typography variant="caption" sx={{ fontWeight: 700 }}>Simulados</Typography>
+					</Stack>
+					<Button variant="outlined" startIcon={<SaveOutlinedIcon />} onClick={HandleExport}>Salvar rascunho</Button>
+					<Accordion className="code-panel__summary" disableGutters>
+						<AccordionSummary expandIcon={<ExpandMoreIcon />}><Typography variant="body2">Importar ou exportar</Typography></AccordionSummary>
+						<AccordionDetails>
+							<Stack spacing={1}>
+								<Button component="label" variant="outlined" startIcon={<FileUploadOutlinedIcon />}>Importar programa<input hidden type="file" accept=".json" onChange={HandleImport} /></Button>
+								<Button variant="text" startIcon={<FileDownloadOutlinedIcon />} onClick={HandleExport}>Exportar programa</Button>
+							</Stack>
+						</AccordionDetails>
+					</Accordion>
+				</Stack>
 			</div>
-
-			{/* Bottom Action Controls */}
-			<div className="mt-4 flex flex-col gap-3 pt-4 border-t border-gray-400">
-				<div className="flex justify-between gap-3">
-					<label className="flex-1 border-2 border-black rounded-xl py-1.5 text-[11px] font-bold text-black uppercase tracking-wider hover:bg-black hover:text-white transition-colors cursor-pointer text-center flex items-center justify-center">
-						Import Code
-						<input
-							type="file"
-							accept=".json"
-							className="hidden"
-							style={{ display: "none" }}
-							onChange={(e) => {
-								HandleImport(e);
-							}}
-						/>
-					</label>
-					<button
-						type="button"
-						className="flex-1 border-2 border-black rounded-xl py-1.5 text-[11px] font-bold text-black uppercase tracking-wider hover:bg-black hover:text-white transition-colors"
-						onClick={() => {
-							HandleExport();
-						}}
-					>
-						Export Code
-					</button>
-				</div>
-				<button
-					type="button"
-					onClick={() => {
-						HandleRunCode();
-					}}
-					className="w-full border-2 border-black rounded-xl py-2 text-[16px] font-bold text-black uppercase tracking-wider hover:bg-black hover:text-white transition-colors shadow-[2px_2px_0px_rgba(0,0,0,1)] hover:shadow-none translate-y-0 hover:translate-y-[2px]"
-				>
-					Run Code
-				</button>
-			</div>
+			<Dialog open={sendDialogOpen} onClose={() => setSendDialogOpen(false)} fullWidth maxWidth="sm">
+				<DialogTitle>Enviar programa ao robô físico?</DialogTitle>
+				<DialogContent>
+					<Alert severity="warning" sx={{ mb: 2 }}>Esta ação pode movimentar o hardware conectado. Verifique a área ao redor do robô antes de continuar.</Alert>
+					<Typography>O programa contém {Math.max(0, blockOrder.length - 1)} comandos e tem duração estimada de {Math.round(totalDuration / 1000)} segundos.</Typography>
+				</DialogContent>
+				<DialogActions>
+					<Button onClick={() => setSendDialogOpen(false)}>Cancelar</Button>
+					<Button variant="contained" onClick={HandleConfirmSend}>Confirmar envio</Button>
+				</DialogActions>
+			</Dialog>
 		</div>
 	);
 };
