@@ -33,7 +33,7 @@ export const createActionSlice = (set, get) => ({
 });
 
 export interface ActionSlice {
-  actions: Map<string, Action[]>;
+  actions: Record<string, Action[]>;
   addAction: (action: Action) => void;
   getActions: (key: string) => Action[] | undefined;
   triggerAction: (
